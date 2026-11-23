@@ -1,0 +1,6 @@
+{
+  "camera": { "index": 0, "width": 3840, "height": 2160 },
+  "table_mm": { "width": 1000, "height": 700 },
+  "px_per_mm": 3.0,
+  "packs": ["core"]
+}

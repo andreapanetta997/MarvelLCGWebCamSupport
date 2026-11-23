@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+/data/
+snapshots/
+docs/test/
+test_frame.jpg
+test_result.jpg
+markers_A4.png

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Marvel LCG WebCam Support</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Marvel LCG WebCam Support</h1>
+    <span id="status">Caricamento di OpenCV…</span>
+  </header>
+
+  <main>
+    <section class="controls">
+      <button id="start" disabled>Avvia telecamera</button>
+      <button id="recalibrate" disabled>Ricalibra marker</button>
+      <button id="analyze" disabled>Analizza ora</button>
+      <label class="button">Analizza foto<input id="photo" type="file" accept="image/*" hidden></label>
+    </section>
+
+    <details id="settings">
+      <summary>Impostazioni</summary>
+      <label>Telecamera <select id="camera"><option value="">predefinita (posteriore sul cellulare)</option></select></label>
+      <label>Distanza tra i centri dei marker, larghezza (mm) <input id="width" type="number" min="200" max="3000"></label>
+      <label>Distanza tra i centri dei marker, altezza (mm) <input id="height" type="number" min="200" max="3000"></label>
+      <fieldset id="packs"><legend>Pack in uso</legend></fieldset>
+      <button id="save">Salva</button>
+    </details>
+
+    <div class="view">
+      <canvas id="table"></canvas>
+      <video id="video" playsinline muted></video>
+    </div>
+
+    <section>
+      <h2 id="count">Carte</h2>
+      <ul id="cards"></ul>
+    </section>
+  </main>
+
+  <script>var Module = { onRuntimeInitialized() { document.dispatchEvent(new Event('opencv-ready')); } };</script>
+  <script async src="https://docs.opencv.org/4.10.0/opencv.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
