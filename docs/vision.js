@@ -108,6 +108,21 @@ export class Table {
 
 export function findCards(top, ppm) {
   const expected = CARD_MM[0] * CARD_MM[1] * ppm ** 2;
+  return cardRects(top, 0.7 * expected, 1.35 * expected);
+}
+
+// Senza marker: stima i pixel per mm dalla dimensione delle carte stesse (mediana dei rettangoli
+// con le proporzioni giuste). Funziona se il telefono è parallelo al tavolo. null = nessuna carta.
+export function estimateScale(img) {
+  const n = img.rows * img.cols;
+  const rects = cardRects(img, 0.002 * n, 0.15 * n);
+  if (!rects.length) return null;
+  const ppm = rects.map(r => Math.sqrt(r.size.width * r.size.height / (CARD_MM[0] * CARD_MM[1]))).sort((a, b) => a - b);
+  return { ppm: ppm[Math.floor(ppm.length / 2)], count: rects.length };
+}
+
+// Rettangoli con le proporzioni di una carta e area tra minArea e maxArea (pixel²).
+function cardRects(top, minArea, maxArea) {
   const blur = new cv.Mat(), chans = new cv.MatVector(), edges = new cv.Mat(), e = new cv.Mat();
   cv.GaussianBlur(top, blur, new cv.Size(5, 5), 0);
   cv.split(blur, chans);
@@ -128,7 +143,7 @@ export function findCards(top, ppm) {
     const { width: w, height: h } = rect.size;
     const area = w * h;
     const ratio = Math.max(w, h) / Math.max(Math.min(w, h), 1);
-    if (area > 0.7 * expected && area < 1.35 * expected && ratio > 1.25 && ratio < 1.55) {
+    if (area > minArea && area < maxArea && ratio > 1.25 && ratio < 1.55) {
       const fill = cv.contourArea(cnt) / area;
       if (fill > 0.85) candidates.push([fill, rect]);
     }
@@ -136,8 +151,10 @@ export function findCards(top, ppm) {
   }
   blur.delete(); chans.delete(); edges.delete(); e.delete(); kernel.delete(); contours.delete(); hier.delete();
 
-  const rects = [], minDist = CARD_MM[0] * ppm * 0.4;
+  // lo stesso bordo produce più contorni: teniamo il migliore per ogni posizione
+  const rects = [];
   for (const [, r] of candidates.sort((a, b) => b[0] - a[0])) {
+    const minDist = 0.4 * Math.min(r.size.width, r.size.height);
     if (rects.every(o => Math.hypot(r.center.x - o.center.x, r.center.y - o.center.y) > minDist)) rects.push(r);
   }
   return rects;

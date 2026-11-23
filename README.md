@@ -40,6 +40,13 @@ Il cellulare dà accesso alla fotocamera solo su HTTPS, ed è per questo che ser
 **Aggiungere pack**: `python build_web_index.py core cap_a …` (codici pack di MarvelCDB)
 rigenera `docs/data/`; poi scegli i pack nelle *Impostazioni* della pagina.
 
+**Senza marker** (per provare senza stampare nulla): premi *Senza marker: sì*. L'immagine
+non viene raddrizzata; la scala si ricava dalla dimensione delle carte stesse. Tieni il telefono
+parallelo al tavolo, con la parte alta verso il lato opposto ai giocatori: sul cellulare una livella
+(sensori di orientamento) indica quando è in piano, e l'analisi automatica parte solo allora.
+Test sintetico con prospettiva leggera: 138/140 carte riconosciute, stato esaurita corretto per tutte.
+Le posizioni in mm sono approssimative e la modalità soffre se il telefono è inclinato.
+
 Sul cellulare: mettilo su un supporto sopra il tavolo, lascia la pagina aperta (lo schermo
 resta acceso da solo). Le impostazioni restano salvate nel browser.
 
