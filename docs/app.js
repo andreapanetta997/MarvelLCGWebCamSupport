@@ -55,7 +55,7 @@ async function setNoMarker(on) {
 
 function showNoMarker() {
   $('nomarker').setAttribute('aria-pressed', settings.noMarker);
-  $('nomarker').textContent = `Senza marker: ${settings.noMarker ? 'sì' : 'no'}`;
+  $('nomarker').textContent = settings.noMarker ? '☑ Senza marker (attiva)' : '☐ Senza marker';
   $('recalibrate').hidden = settings.noMarker;
   $('level').hidden = !settings.noMarker || tilt === null;
 }
