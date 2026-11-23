@@ -44,13 +44,18 @@ rigenera `docs/data/`; poi scegli i pack nelle *Impostazioni* della pagina.
 non viene raddrizzata; la scala si ricava dalla dimensione delle carte stesse. Tieni il telefono
 parallelo al tavolo, con la parte alta verso il lato opposto ai giocatori: sul cellulare una livella
 (sensori di orientamento) indica quando è in piano, e l'analisi automatica parte solo allora.
-Test sintetico con prospettiva leggera: 138/140 carte riconosciute, stato esaurita corretto per tutte.
+La scala si aggiorna a ogni analisi con le carte riconosciute, quindi segue il telefono se si avvicina.
 Le posizioni in mm sono approssimative e la modalità soffre se il telefono è inclinato.
 
 Sul cellulare: mettilo su un supporto sopra il tavolo, lascia la pagina aperta (lo schermo
 resta acceso da solo). Le impostazioni restano salvate nel browser.
 
-Test sintetico nel browser: stessi risultati della versione Python (139/140), circa 0,6 s per analisi su PC.
+L'analisi è continua: appena ne finisce una parte la successiva (si saltano i fotogrammi mossi).
+La pagina lavora a 2 px/mm e cattura il fotogramma già rimpicciolito dal browser. Una carta persa
+per un'analisi o due resta visibile con il bordo tratteggiato.
+
+Test sintetico nel browser (5 foto, 140 carte): 140/140 riconosciute, con e senza marker,
+circa 0,5 s per analisi su PC (la prima include calibrazione o stima della scala).
 
 ## Installazione (versione Python)
 

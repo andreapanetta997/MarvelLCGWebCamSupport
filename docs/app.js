@@ -1,20 +1,23 @@
-// Pagina: telecamera, rilevamento del movimento, analisi e disegno dei risultati.
-import { Table, analyze, boxCorners, estimateScale, loadIndex } from './vision.js';
+// Pagina: telecamera, analisi continua e disegno dei risultati.
+import { CARD_MM, Table, analyze, boxCorners, estimateScale, loadIndex } from './vision.js';
 
-const PX_PER_MM = 3;
-const CHECK_MS = 200;     // ogni quanto controlliamo se il tavolo si muove
-const STILL_CHECKS = 3;   // controlli fermi di fila prima di analizzare (~0,6 s)
-const MOTION = 3;         // differenza media (0-255) oltre la quale c'è movimento
-const COLORS = { ready: '#50c850', exhausted: '#ff8c00', unknown: '#e63c3c' };
+const PX_PER_MM = 2;      // risoluzione di lavoro: 2 px per mm basta per riconoscere e dimezza i tempi rispetto a 3
+const MAX_GRAB = 2560;    // con i marker: lato massimo del fotogramma catturato
+const MIN_INTERVAL = 120; // ms minimi tra due analisi (il resto del tempo lo usa l'analisi stessa)
+const MOTION = 10;        // differenza media (0-255) oltre la quale l'immagine è mossa: si salta il fotogramma
+const KEEP_MISSES = 2;    // una carta non vista viene mostrata ancora per questo numero di analisi
 const MAX_TILT = 8;       // senza marker: gradi massimi di inclinazione del telefono per analizzare
+const COLORS = { ready: '#50c850', exhausted: '#ff8c00', unknown: '#e63c3c' };
 
 const $ = id => document.getElementById(id);
 const settings = Object.assign({ width: 1000, height: 700, packs: ['core'], camera: '', noMarker: false },
   JSON.parse(localStorage.getItem('mc-settings') || '{}'));
 
-let index = null, table = null, stream = null, timer = null;
-let prevSmall = null, still = 0;
+let index = null, table = null, stream = null;
 let tilt = null;          // inclinazione del telefono rispetto al piano (null = nessun sensore)
+let rawPpm = null;        // senza marker: pixel per mm nel video originale (stimati dalle carte)
+let tracked = [];         // carte mostrate: { card, misses }
+let rate = 0;             // analisi al secondo (media mobile)
 
 const status = msg => { $('status').textContent = msg; };
 
@@ -33,7 +36,7 @@ async function init() {
   $('start').onclick = () => (stream ? stopCamera() : startCamera());
   $('nomarker').onclick = () => setNoMarker(!settings.noMarker);
   $('recalibrate').onclick = () => { if (table) { table.H = null; status('Ricalibrazione: inquadra i 4 marker'); } };
-  $('analyze').onclick = () => analyzeVideo(true);
+  $('analyze').onclick = () => stream && process($('video'));
   $('photo').onchange = e => e.target.files[0] && analyzeImage(URL.createObjectURL(e.target.files[0]));
   $('save').onclick = saveSettings;
   const params = new URLSearchParams(location.search);  // es. ?test=test/frame_0.jpg&nomarker=1
@@ -49,6 +52,8 @@ async function init() {
 async function setNoMarker(on) {
   settings.noMarker = on;
   localStorage.setItem('mc-settings', JSON.stringify(settings));
+  rawPpm = null;
+  tracked = [];
   if (on) await startLevel();  // su iPhone il permesso va chiesto dentro un clic
   showNoMarker();
 }
@@ -134,48 +139,63 @@ async function startCamera() {
   if (settings.noMarker) startLevel();
   $('start').textContent = 'Ferma telecamera';
   navigator.wakeLock?.request('screen').catch(() => {});  // niente schermo che si spegne sul cellulare
-  timer = setInterval(watch, CHECK_MS);
+  tracked = [];
+  loop();
 }
 
 function stopCamera() {
-  clearInterval(timer);
   stream.getTracks().forEach(t => t.stop());
   stream = null;
   $('video').classList.remove('live');
   $('start').textContent = 'Avvia telecamera';
 }
 
-// Confronta un'anteprima minuscola con la precedente: analizza solo quando il tavolo è fermo.
-const small = Object.assign(document.createElement('canvas'), { width: 160, height: 90 });
-function watch() {
+// Analisi continua: appena finita un'analisi si passa alla successiva (con una pausa minima).
+// Si salta il fotogramma se l'immagine è mossa o, senza marker, se il telefono è inclinato.
+async function loop() {
+  if (!stream) return;
+  const t0 = performance.now();
   const v = $('video');
-  if (!v.videoWidth) return;
+  if (v.videoWidth) {
+    const level = !settings.noMarker || tilt === null || tilt <= MAX_TILT;
+    if (motion(v) > MOTION) status('Immagine mossa…');
+    else if (level) {
+      process(v);
+      const dt = performance.now() - t0;
+      rate = rate ? rate * 0.8 + (1000 / Math.max(dt, MIN_INTERVAL)) * 0.2 : 1000 / Math.max(dt, MIN_INTERVAL);
+    }
+  }
+  setTimeout(loop, Math.max(10, MIN_INTERVAL - (performance.now() - t0)));
+}
+
+// Differenza media tra un'anteprima minuscola e quella precedente.
+const small = Object.assign(document.createElement('canvas'), { width: 160, height: 90 });
+let prevSmall = null;
+function motion(v) {
   const ctx = small.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(v, 0, 0, small.width, small.height);
   const px = ctx.getImageData(0, 0, small.width, small.height).data;
   let diff = 0;
   if (prevSmall) for (let i = 0; i < px.length; i += 4) diff += Math.abs(px[i + 1] - prevSmall[i + 1]);
-  diff /= px.length / 4;
   prevSmall = px;
-  still = diff > MOTION ? 0 : still + 1;
-  if (settings.noMarker) {
-    // senza marker si analizza solo con il telefono fermo e in piano (se ha i sensori)
-    if (still === STILL_CHECKS && (tilt === null || tilt <= MAX_TILT)) analyzeVideo(false);
-  } else if (still === STILL_CHECKS || !table.H) {
-    analyzeVideo(false);
-  }
+  return diff / (px.length / 4);
 }
 
 // ---------- analisi ----------
 
-const grab = document.createElement('canvas');
-function analyzeVideo(force) {
-  const v = $('video');
-  if (!v.videoWidth) return;
-  grab.width = v.videoWidth;
-  grab.height = v.videoHeight;
-  grab.getContext('2d').drawImage(v, 0, 0);
-  process(grab, force);
+// Cattura la sorgente (video o immagine) già rimpicciolita dal browser: molto più veloce
+// che leggere il fotogramma intero e ridimensionarlo con OpenCV.
+const grabCanvas = document.createElement('canvas');
+function grab(source, scale) {
+  const w = source.videoWidth || source.naturalWidth, h = source.videoHeight || source.naturalHeight;
+  grabCanvas.width = Math.round(w * scale);
+  grabCanvas.height = Math.round(h * scale);
+  const ctx = grabCanvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, grabCanvas.width, grabCanvas.height);
+  const rgba = cv.imread(grabCanvas), frame = new cv.Mat();
+  cv.cvtColor(rgba, frame, cv.COLOR_RGBA2BGR);
+  rgba.delete();
+  return frame;
 }
 
 async function analyzeImage(url) {
@@ -183,57 +203,83 @@ async function analyzeImage(url) {
   img.src = url;
   await img.decode();
   table.H = null;
-  process(img, true);
+  rawPpm = null;
+  tracked = [];
+  process(img);
 }
 
-function process(source, force) {
-  const rgba = cv.imread(source), frame = new cv.Mat();
-  cv.cvtColor(rgba, frame, cv.COLOR_RGBA2BGR);
-  rgba.delete();
+function process(source) {
   const t0 = performance.now();
-  let top, note = '';
+  const w = source.videoWidth || source.naturalWidth;
+  let top, ppm;
+
   if (settings.noMarker) {
-    top = scaleFromCards(frame);
-    frame.delete();
-    if (!top) { status('Nessuna carta trovata per stimare la scala: avvicina il telefono o migliora la luce'); return; }
-    note = ` · scala stimata da ${top.cardsUsed} carte`;
+    if (!rawPpm) {
+      // prima stima della scala su una copia piccola
+      const g = Math.min(1, 1600 / w);
+      const f = grab(source, g);
+      const est = estimateScale(f);
+      f.delete();
+      if (!est) { status('Nessuna carta trovata per stimare la scala: avvicina il telefono o migliora la luce'); return; }
+      rawPpm = est.ppm / g;
+    }
+    const s = Math.min(2, PX_PER_MM / rawPpm);
+    top = grab(source, s);
+    ppm = rawPpm * s;
   } else {
-    if (!table.H) {
+    const g = Math.min(1, MAX_GRAB / w);
+    const frame = grab(source, g);
+    if (!table.H || table.grabWidth !== frame.cols) {
       const found = table.calibrate(frame);
       if (found !== true) {
         status(`Marker visibili: ${found.length ? found.join(', ') : 'nessuno'} — servono 0, 1, 2, 3`);
         frame.delete();
         return;
       }
+      table.grabWidth = frame.cols;
     }
     top = table.rectify(frame);
     frame.delete();
+    ppm = PX_PER_MM;
   }
-  const cards = analyze(top, index, top.ppm || PX_PER_MM);
-  status(`${cards.length} carte · analisi in ${Math.round(performance.now() - t0)} ms${note}${force ? '' : ' (tavolo fermo)'}`);
-  render(top, cards);
+
+  const cards = analyze(top, index, ppm);
+  if (settings.noMarker) updateScale(cards, ppm);
+  const shown = track(cards);
+  const ms = Math.round(performance.now() - t0);
+  status(`${cards.length} carte · ${ms} ms${stream && rate ? ` · ${rate.toFixed(1)} analisi/s` : ''}`);
+  render(top, shown);
   top.delete();
   window.lastResult = cards.map(({ rect, ...c }) => c);  // usato dai test automatici
 }
 
-// Senza marker: l'immagine viene presa così com'è e ridimensionata in modo che 1 mm = PX_PER_MM pixel,
-// usando la dimensione media delle carte trovate. La stima si fa su una copia piccola (più veloce).
-function scaleFromCards(frame) {
-  const f = Math.min(1, 1600 / Math.max(frame.cols, frame.rows));
-  const small = new cv.Mat();
-  cv.resize(frame, small, new cv.Size(Math.round(frame.cols * f), Math.round(frame.rows * f)), 0, 0, cv.INTER_AREA);
-  const est = estimateScale(small);
-  small.delete();
-  if (!est) return null;
-  const s = Math.min(2, PX_PER_MM / (est.ppm / f));  // fattore dal fotogramma originale alla scala voluta
-  const top = new cv.Mat();
-  cv.resize(frame, top, new cv.Size(Math.round(frame.cols * s), Math.round(frame.rows * s)), 0, 0, s < 1 ? cv.INTER_AREA : cv.INTER_LINEAR);
-  top.cardsUsed = est.count;
-  top.ppm = (est.ppm / f) * s;  // = PX_PER_MM, salvo carte minuscole (ingrandimento limitato a 2x)
-  return top;
+// Senza marker: aggiorna la scala con la dimensione delle carte appena riconosciute (se il telefono
+// si avvicina o si allontana la scala lo segue). Dopo 3 analisi vuote si rifà la stima da zero.
+function updateScale(cards, ppm) {
+  const sizes = cards.filter(c => c.id)
+    .map(c => Math.sqrt(c.rect.size.width * c.rect.size.height / (CARD_MM[0] * CARD_MM[1])) / ppm)
+    .sort((a, b) => a - b);
+  if (sizes.length) {
+    rawPpm *= sizes[Math.floor(sizes.length / 2)];
+    updateScale.empty = 0;
+  } else if (++updateScale.empty >= 3) {
+    rawPpm = null;
+  }
+}
+updateScale.empty = 0;
+
+// Una carta che sparisce per una o due analisi (riflesso, mano) resta visibile, tratteggiata.
+function track(cards) {
+  const near = (a, b) => Math.hypot(a.centerMm[0] - b.centerMm[0], a.centerMm[1] - b.centerMm[1]) < CARD_MM[0] * 0.6;
+  const kept = tracked
+    .filter(t => t.card.id && !cards.some(c => near(c, t.card)))
+    .map(t => ({ card: t.card, misses: t.misses + 1 }))
+    .filter(t => t.misses <= KEEP_MISSES);
+  tracked = [...cards.map(card => ({ card, misses: 0 })), ...kept];
+  return tracked;
 }
 
-function render(top, cards) {
+function render(top, shown) {
   const canvas = $('table');
   const scale = Math.min(1, (canvas.clientWidth * devicePixelRatio || 1400) / top.cols);
   const disp = new cv.Mat(), rgba = new cv.Mat();
@@ -243,24 +289,27 @@ function render(top, cards) {
   disp.delete(); rgba.delete();
 
   const ctx = canvas.getContext('2d');
-  ctx.lineWidth = Math.max(2, 3 * scale * 2);
-  ctx.font = `bold ${Math.max(11, Math.round(26 * scale))}px system-ui`;
-  for (const c of cards) {
+  const line = Math.max(2, 4 * scale);
+  ctx.font = `bold ${Math.max(11, Math.round(18 * scale * 2))}px system-ui`;
+  for (const { card: c, misses } of shown) {
     const state = c.id === null ? 'unknown' : c.exhausted ? 'exhausted' : 'ready';
     const q = boxCorners(c.rect).map(([x, y]) => [x * scale, y * scale]);
+    ctx.setLineDash(misses ? [8, 6] : []);
+    ctx.lineWidth = line;
     ctx.strokeStyle = ctx.fillStyle = COLORS[state];
     ctx.beginPath();
     q.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
     ctx.closePath();
     ctx.stroke();
+    ctx.setLineDash([]);
     const label = c.name + (c.exhausted ? ' ⟳' : '');
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 4;
     ctx.strokeText(label, q[0][0], q[0][1] - 6);
     ctx.fillText(label, q[0][0], q[0][1] - 6);
-    ctx.lineWidth = Math.max(2, 3 * scale * 2);
   }
 
+  const cards = shown.map(t => t.card);
   $('count').textContent = `Carte sul tavolo: ${cards.length}`;
   $('cards').replaceChildren(...cards
     .sort((a, b) => a.centerMm[1] - b.centerMm[1] || a.centerMm[0] - b.centerMm[0])
